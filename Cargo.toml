@@ -1,0 +1,13 @@
+[package]
+name = "csv_editor"
+version = "0.1.0"
+authors = ["Nick K <nick.k.f925@gmail.com>"]
+
+[dependencies]
+cursive = "*"
+cursive_table_view = "*"
+log = "*"
+env_logger = "*"
+csv = "*"
+rand = "*"
+cute = "*"
