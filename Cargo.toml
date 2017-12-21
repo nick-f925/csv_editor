@@ -3,11 +3,15 @@ name = "csv_editor"
 version = "0.1.0"
 authors = ["Nick K <nick.k.f925@gmail.com>"]
 
+[[bin]]
+name = "csv_view"
+path = "src/main.rs"
+
 [dependencies]
-cursive = "*"
-cursive_table_view = "*"
-log = "*"
-env_logger = "*"
-csv = "*"
-rand = "*"
-cute = "*"
+argparse = "0.2.1"
+cursive = "0.7.5"
+cursive_table_view = "0.4.2"
+log = "0.3.8"
+env_logger = "0.4.3"
+csv = "0.15.0"
+cute = "0.3.0"

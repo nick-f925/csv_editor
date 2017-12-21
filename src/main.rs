@@ -1,23 +1,24 @@
-extern crate cursive;
 #[macro_use] extern crate cute;
 #[macro_use] extern crate log;
+extern crate argparse;
+extern crate cursive;
 extern crate env_logger;
 extern crate csv;
 extern crate cursive_table_view;
-extern crate rand;
+
+use argparse::{ArgumentParser, Store, Print};
 
 use std::cmp::Ordering;
-
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cursive::Cursive;
 use cursive::traits::*;
 use cursive::align::HAlign;
 use cursive::direction::Orientation;
-use cursive::views::{BoxView, Dialog, DummyView, LinearLayout};
+use cursive::views::{Dialog, LinearLayout};
 use cursive_table_view::{TableView, TableViewItem};
 
 #[derive(Clone, Debug)]
@@ -36,6 +37,40 @@ struct Table {
     header: Row,
     rows: Vec<Row>,
     num_cols: usize,
+}
+
+enum Error {
+    FileError { filepath: PathBuf, why: ::std::io::Error },
+    ExitCode(i32)
+}
+
+impl Error {
+    fn get_message(&self) -> Option<String> {
+        match self {
+            &Error::FileError{ref filepath, ref why} => {
+                let fp = filepath.as_os_str().to_string_lossy();
+                Some(format!("could not open '{}': {}", fp, why.to_string()))
+            },
+            &Error::ExitCode(_) => None
+        }
+    }
+    fn from_bad_file<P>(filepath: P, why: ::std::io::Error) -> Error
+    where P: AsRef<Path>
+    {
+        Error::FileError{filepath: filepath.as_ref().to_path_buf(), why: why}
+    }
+    fn print_error(&self) {
+        match self.get_message() {
+            Some(s) => eprintln!("fatal: {}", s),
+            None => {}
+        }
+    }
+    fn exit_code(&self) -> i32 {
+        match self {
+            &Error::ExitCode(i) => i,
+            _ => 1
+        }
+    }
 }
 
 impl Cell {
@@ -68,19 +103,16 @@ impl Row {
         self.cells.push(cell);
     }
     fn cell_width(&self, c: usize) -> usize {
-        let cell: Option<&Cell> = self.cells.as_slice().get(c);
+        let cell: Option<&Cell> = self.cells.get(c);
         match cell {
             Some(cell) => cell.value.len(),
             None => 0
         }
     }
     fn try_get<'a>(&'a self, c: usize, missing: &'a str) -> &'a str {
-        let cell: Option<&'a Cell> = self.cells.as_slice().get(c);
+        let cell: Option<&'a Cell> = self.cells.get(c);
         match cell {
-            Some(cell) => {
-                let s: &'a str = cell.value.as_str();
-                s
-            },
+            Some(cell) => &cell.value,
             None => missing
         }
     }
@@ -130,20 +162,21 @@ impl Table {
         }
     }
     fn col_width(&self, c: usize) -> usize {
-        match self.rows.iter().map(|r| r.cell_width(c)).max() {
-            Some(w) => w,
-            None => 0
-        }
+        let w: Option<usize> = self.rows.iter().map(|r| r.cell_width(c)).max();
+        w.unwrap_or(0)
     }
     fn col_width2(&self, c: usize, cell_minwidth: usize, cell_padding: usize, header_padding: usize) -> usize {
         let w = self.col_width(c).max(cell_minwidth) + cell_padding;
         let w2 = self.header.cells[c].len() + header_padding;
         w.max(w2)
     }
-    fn from_filepath<P>(filepath: P) -> Table
+    fn from_filepath<P>(filepath: P) -> Result<Table, Error>
     where P: AsRef<Path>
     {
-        let file = File::open(&filepath).expect("no such file");
+        let file = match File::open(&filepath) {
+            Err(why) => return Err(Error::from_bad_file(filepath, why)),
+            Ok(file) => file
+        };
         let mut buf = BufReader::new(file);
         let mut header: String = String::new();
         buf.read_line(&mut header).expect("failed to read from file");
@@ -158,7 +191,7 @@ impl Table {
             }
         }
         newself.fix_header_names();
-        return newself;
+        Ok(newself)
     }
     fn create_table_view(&self) -> TableView<Row, BasicColumn> {
         let mut tv = TableView::<Row, BasicColumn>::new();
@@ -211,16 +244,41 @@ impl TableViewItem<BasicColumn> for Row {
 }
 
 fn main() {
-    let _ = env_logger::init();
-    let filepath = ::std::env::args().nth(1).unwrap();
-    let table = Table::from_filepath(filepath);
-    info!("num_rows={}", table.rows.len());
+    fn body() -> Result<i32, Error> {
+        let _ = env_logger::init();
+        let mut filepath: String = String::new();
+        {
+            let mut ap = ArgumentParser::new();
+            ap.set_description("view a csv file in a table (ncurses)");
+            ap.add_option(&["-V", "--version"],
+                Print(env!("CARGO_PKG_VERSION").to_string()), "Show Version");
+            ap.refer(&mut filepath).required()
+                .add_argument("file", Store, "filepath to .csv, use '-' to read from STDIN");
+            match ap.parse_args() {
+                Ok(()) => {}
+                Err(x) => return Err(Error::ExitCode(x))
+            }
+        }
+        let table = Table::from_filepath(filepath)?;
+        info!("num_rows={}", table.rows.len());
 
-    let mut siv = Cursive::new();
-    let mut layout = LinearLayout::new(Orientation::Horizontal);
-    let sum_colwidth: usize = table.sum_colwidth2("<NULL>".len(), 2, 2 + 4);
-    let num_rows = table.num_rows() + 4;
-    layout.add_child(table.create_table_view().min_size((sum_colwidth, num_rows)));
-    siv.add_layer(Dialog::around(layout).title("csvView"));
-    siv.run();
+        let mut siv = Cursive::new();
+        let mut layout = LinearLayout::new(Orientation::Horizontal);
+        let sum_colwidth: usize = table.sum_colwidth2("<NULL>".len(), 2, 2 + 4);
+        let num_rows = table.num_rows() + 4;
+        layout.add_child(table.create_table_view().min_size((sum_colwidth, num_rows)));
+        siv.add_layer(Dialog::around(layout).title("csvView"));
+        siv.run();
+        Ok(0)
+    }
+
+    let exit_code: i32 = match body() {
+        Err(e) => {
+            e.print_error();
+            e.exit_code()
+        }
+        Ok(i) => i
+    };
+
+    std::process::exit(exit_code);
 }
